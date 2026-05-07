@@ -1,0 +1,56 @@
+{
+    "QA Packaging": {
+        "Pre": {
+            "subject": "-MONTH- QA & Packaging Leadership Meeting Agenda",
+            "body": "Hi Team\n\nAttached is the agenda for our upcoming -MONTH- meeting between the Quality Assurance and Packaging teams. \nThis meeting is designed to align our strategies, share key information, and foster collaboration in pursuit of our common goals. \nTo ensure that our discussion is productive, please review the agenda topics in advance and come prepared to offer your insights or pose any questions.\nIf you have any suggestions for modifications or additional topics, kindly email me so that the agenda can be updated accordingly."
+        },
+        "Post": {
+            "subject": "Agenda & Notes from the -MONTH- Meeting between Quality Assurance and Packaging Leadership",
+            "body": "Hi Team\n\nAttached is the -MONTH- agenda from our most recent Quality Assurance and Packaging Leadership meeting.\nBelow are the meeting notes.\nThank you all for your continued support and participation."
+        }
+    },
+    "QA Manufacturing": {
+        "Pre": {
+            "subject": "-MONTH- QA & Manufacturing Leadership Meeting Agenda",
+            "body": "Hi Team\n\nAttached is the agenda for our upcoming -MONTH- meeting between the Quality Assurance and Manufacturing teams. \nThis meeting is designed to align our strategies, share key information, and foster collaboration in pursuit of our common goals. \nTo ensure that our discussion is productive, please review the agenda topics in advance and come prepared to offer your insights or pose any questions.\nIf you have any suggestions for modifications or additional topics, kindly email me so that the agenda can be updated accordingly."
+        },
+        "Post": {
+            "subject": "Agenda & Notes from the -MONTH- Meeting between Quality Assurance and Manufacturing Leadership",
+            "body": "Hi Team\n\nAttached is the -MONTH- agenda from our most recent Quality Assurance and Manufacturing Leadership meeting.\nBelow are the meeting notes.\nThank you all for your continued support and participation."
+        }
+    },
+    "QA Mason": {
+        "Pre": {
+            "subject": "-MONTH- QA & Mason Leadership Meeting Agenda",
+            "body": "Hi Team\n\nAttached is the agenda for our upcoming -MONTH- meeting between the Quality Assurance and Mason teams. \nThis meeting is designed to align our strategies, share key information, and foster collaboration in pursuit of our common goals. \nTo ensure that our discussion is productive, please review the agenda topics in advance and come prepared to offer your insights or pose any questions.\nIf you have any suggestions for modifications or additional topics, kindly email me so that the agenda can be updated accordingly."
+        },
+        "Post": {
+            "subject": "Agenda & Notes from the -MONTH- Meeting between Quality Assurance and Mason Leadership",
+            "body": "Hi Team\n\nAttached is the -MONTH- agenda from our most recent Quality Assurance and Mason Leadership meeting.\nBelow are the meeting notes.\nThank you all for your continued support and participation."
+        }
+    },
+    "Mason Bulk CAPA Meeting": {
+        "Pre": {
+            "subject": "-MONTH- Mason Bulk CAPA Meeting Agenda",
+            "body": "Hi Team\n\nHope everyone is doing well. Please find below the link to the agenda for our upcoming -MONTH- Mason Bulk Defect CAPA meeting. \nDuring this session, we will start with CAPA #239352. Then review the March Hold Data and Deviations. Discuss the Gummy Piece Definition and Sticky Gummy Initiative topics.\nIf you have any updates or additional topics to include, please inform me, and I will ensure the agenda is updated accordingly.\n\n--LINK HERE--\n\nThe monthly Mason Bulk Defect CAPA Meeting brings together leadership from Mason production, Product Development, Process Development and Quality Assurance to collaboratively address and manage Corrective and Preventive Actions related specifically to gummy bulk defects."
+        },
+        "Post": {
+            "subject": "-MONTH- Mason Bulk Defect CAPA Meeting Notes",
+            "body": "Hi Team\n\nThank you for your participation in our -MONTH- Mason Street Bulk Defect CAPA meeting. \nFor your reference, please find a link to the Agenda and the Meeting Notes Below:\n  INSERT LINK HERE\n\nYour insights and collaboration are essential to our continuous\u2010improvement efforts. If you have any questions or would like to discuss any of the action items further, please don\u2019t hesitate to reach out.\nThank you again for your ongoing support and engagement!"
+        }
+    },
+    "QA Warehouse": {
+        "Pre": {
+            "subject": "-MONTH- QA & Warehouse Leadership Meeting Agenda",
+            "body": "Hi Team\n\nAttached is the agenda for our upcoming -MONTH- meeting between the Quality Assurance and Warehouse teams. \nThis meeting is designed to align our strategies, share key information, and foster collaboration in pursuit of our common goals. \nTo ensure that our discussion is productive, please review the agenda topics in advance and come prepared to offer your insights or pose any questions.\nIf you have any suggestions for modifications or additional topics, kindly email me so that the agenda can be updated accordingly."
+        },
+        "Post": {
+            "subject": "Agenda & Notes from the -MONTH- Meeting between Quality Assurance and Warehouse Leadership",
+            "body": "Hi Team\n\nAttached is the -MONTH- agenda from our most recent Quality Assurance and Warehouse Leadership meeting.\nBelow are the meeting notes.\nThank you all for your continued support and participation."
+        },
+        "Stars & Wins Request": {
+            "subject": "-MONTH- QA and Warehouse Meeting Stars and Wins",
+            "body": "Hello Team,\n\nWith the -MONTH- QA and Warehouse bi-monthly Meeting coming up, I'd like your help nominating Warehouse individuals or groups during the last two months for our Quality Win and/or Quality Star Awards.\nPlease send me your nomination(s) for either or both awards, and I can make sure to recognize the person or team during our next meeting. Your input is vital in ensuring that our colleagues' efforts and accomplishments are acknowledged and celebrated, and also sets the meeting off to a great start! \nFor any questions or assistance, feel free to contact me."
+        }
+    }
+}
