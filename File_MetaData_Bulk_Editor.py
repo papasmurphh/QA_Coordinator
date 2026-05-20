@@ -1,5 +1,9 @@
 """File Metadata Bulk Editor (Standard Library only).
 
+Builds customizable PowerShell scripts for:
+1) Timestamp updates (created / modified / accessed)
+2) Property metadata updates for top common fields
+3) Power rename (counting + custom patterns)
 Generates PowerShell scripts for:
 1) Timestamp updates (created/modified/accessed)
 2) MP3 title metadata cleanup
@@ -16,6 +20,19 @@ from tkinter import filedialog, messagebox, ttk
 
 APP_TITLE = "File Metadata Bulk Editor"
 DATE_FMT = "%m/%d/%Y %I:%M:%S %p"
+
+COMMON_METADATA_FIELDS = {
+    "Title": 21,
+    "Subject": 3,
+    "Authors": 20,
+    "Tags": 18,
+    "Comments": 24,
+    "Category": 2,
+    "Rating": 19,
+    "Album": 14,
+    "Track Number": 26,
+    "Year": 15,
+}
 
 
 @dataclass
@@ -34,6 +51,9 @@ class FileMetadataBulkEditor(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title(APP_TITLE)
+        self.geometry("1240x860")
+        self.minsize(1020, 700)
+        ttk.Style(self).theme_use("clam")
         self.geometry("1200x820")
         self.minsize(1000, 700)
         self._style = ttk.Style(self)
@@ -51,6 +71,17 @@ class FileMetadataBulkEditor(tk.Tk):
         self.include_subfolders = tk.BooleanVar(value=True)
         self.include_files = tk.BooleanVar(value=True)
 
+        self.meta_recursive = tk.BooleanVar(value=True)
+        self.meta_target = tk.StringVar(value="files")
+        self.meta_sort = tk.StringVar(value="name")
+        self.meta_field = tk.StringVar(value="Track Number")
+        self.meta_mode = tk.StringVar(value="counter_only")
+        self.meta_mode_token = tk.StringVar(value="numeric")
+        self.meta_base_text = tk.StringVar(value="")
+        self.meta_start = tk.StringVar(value="1")
+        self.meta_padding = tk.StringVar(value="2")
+        self.meta_separator = tk.StringVar(value=" - ")
+        self.meta_custom_pattern = tk.StringVar(value="{base}{sep}{token}")
         self.mp3_backup = tk.BooleanVar(value=True)
         self.mp3_recursive = tk.BooleanVar(value=True)
 
@@ -71,6 +102,8 @@ class FileMetadataBulkEditor(tk.Tk):
     def _build_ui(self) -> None:
         root = ttk.Frame(self, padding=14)
         root.pack(fill="both", expand=True)
+        ttk.Label(root, text=APP_TITLE, font=("Segoe UI", 20, "bold")).pack(anchor="w")
+        ttk.Label(root, text="Modern PowerShell script builder for bulk metadata and naming operations.", foreground="#4b5563").pack(anchor="w", pady=(2, 12))
 
         ttk.Label(root, text=APP_TITLE, font=("Segoe UI", 20, "bold")).pack(anchor="w")
         ttk.Label(
@@ -86,6 +119,11 @@ class FileMetadataBulkEditor(tk.Tk):
 
         op_frame = ttk.LabelFrame(root, text="Operation", padding=10)
         op_frame.pack(fill="x", pady=(0, 10))
+        for label, value in [
+            ("Change Created / Modified / Accessed timestamps", "timestamps"),
+            ("Power Metadata Editor (10 common fields)", "metadata"),
+            ("Power Rename (custom numbering and naming patterns)", "rename"),
+        ]:
         ops = [
             ("Change Created / Modified / Accessed timestamps", "timestamps"),
             ("Clear MP3 Title metadata", "mp3_title"),
@@ -99,6 +137,15 @@ class FileMetadataBulkEditor(tk.Tk):
 
         self.timestamp_frame = ttk.LabelFrame(self.options_container, text="Timestamp Options", padding=10)
         self._build_timestamp_options()
+        self.meta_frame = ttk.LabelFrame(self.options_container, text="Power Metadata Options", padding=10)
+        self._build_metadata_options()
+        self.rename_frame = ttk.LabelFrame(self.options_container, text="Power Naming / Bulk Rename", padding=10)
+        self._build_rename_options()
+
+        actions = ttk.Frame(root)
+        actions.pack(fill="x", pady=(0, 10))
+        for text, cmd in [("Generate Script", self.generate_script), ("Copy Script", self.copy_script), ("Save .ps1", self.save_script), ("Clear", self.clear_preview)]:
+            ttk.Button(actions, text=text, command=cmd).pack(side="left", padx=(0, 8))
 
         self.mp3_frame = ttk.LabelFrame(self.options_container, text="MP3 Options", padding=10)
         self._build_mp3_options()
@@ -125,6 +172,100 @@ class FileMetadataBulkEditor(tk.Tk):
         x = ttk.Scrollbar(root, orient="horizontal", command=self.preview.xview)
         x.pack(fill="x")
         self.preview.configure(yscrollcommand=y.set, xscrollcommand=x.set)
+        self.refresh_option_panels()
+
+    def _build_timestamp_options(self) -> None:
+        r1 = ttk.Frame(self.timestamp_frame)
+        r1.pack(fill="x", pady=(0, 8))
+        ttk.Label(r1, text="Date").pack(side="left")
+        ttk.Entry(r1, textvariable=self.date_value, width=14).pack(side="left", padx=(6, 14))
+        ttk.Label(r1, text="Time").pack(side="left")
+        ttk.Entry(r1, textvariable=self.time_value, width=14).pack(side="left", padx=(6, 14))
+        ttk.Label(self.timestamp_frame, text="Format: 03/11/2026 and 12:00:00 PM", foreground="#6b7280").pack(anchor="w", pady=(0, 8))
+
+        r2 = ttk.Frame(self.timestamp_frame)
+        r2.pack(fill="x", pady=(0, 8))
+        ttk.Checkbutton(r2, text="CreationTime", variable=self.change_created).pack(side="left", padx=(0, 16))
+        ttk.Checkbutton(r2, text="LastWriteTime", variable=self.change_modified).pack(side="left", padx=(0, 16))
+        ttk.Checkbutton(r2, text="LastAccessTime", variable=self.change_accessed).pack(side="left")
+
+        r3 = ttk.Frame(self.timestamp_frame)
+        r3.pack(fill="x")
+        ttk.Checkbutton(r3, text="Include root folder", variable=self.include_root).pack(side="left", padx=(0, 16))
+        ttk.Checkbutton(r3, text="Include subfolders", variable=self.include_subfolders).pack(side="left", padx=(0, 16))
+        ttk.Checkbutton(r3, text="Include files", variable=self.include_files).pack(side="left")
+
+    def _build_metadata_options(self) -> None:
+        r1 = ttk.Frame(self.meta_frame)
+        r1.pack(fill="x", pady=(0, 8))
+        ttk.Label(r1, text="Field").pack(side="left")
+        ttk.Combobox(r1, textvariable=self.meta_field, values=list(COMMON_METADATA_FIELDS.keys()), state="readonly", width=18).pack(side="left", padx=(6, 14))
+        ttk.Label(r1, text="Target").pack(side="left")
+        ttk.Combobox(r1, textvariable=self.meta_target, values=["files", "folders", "files_and_folders"], state="readonly", width=18).pack(side="left", padx=(6, 14))
+        ttk.Checkbutton(r1, text="Include subfolders", variable=self.meta_recursive).pack(side="left")
+
+        r2 = ttk.Frame(self.meta_frame)
+        r2.pack(fill="x", pady=(0, 8))
+        ttk.Label(r2, text="Write Mode").pack(side="left")
+        ttk.Combobox(r2, textvariable=self.meta_mode, values=["counter_only", "base_plus_counter", "custom_pattern", "fixed_value", "clear"], state="readonly", width=18).pack(side="left", padx=(6, 14))
+        ttk.Label(r2, text="Counter Type").pack(side="left")
+        ttk.Combobox(r2, textvariable=self.meta_mode_token, values=["numeric", "alpha", "roman"], state="readonly", width=12).pack(side="left", padx=(6, 14))
+        ttk.Label(r2, text="Sort").pack(side="left")
+        ttk.Combobox(r2, textvariable=self.meta_sort, values=["name", "created", "modified"], state="readonly", width=10).pack(side="left")
+
+        r3 = ttk.Frame(self.meta_frame)
+        r3.pack(fill="x", pady=(0, 8))
+        for label, var, w in [("Base Text", self.meta_base_text, 24), ("Start", self.meta_start, 6), ("Padding", self.meta_padding, 6), ("Separator", self.meta_separator, 10)]:
+            ttk.Label(r3, text=label).pack(side="left")
+            ttk.Entry(r3, textvariable=var, width=w).pack(side="left", padx=(6, 12))
+
+        r4 = ttk.Frame(self.meta_frame)
+        r4.pack(fill="x")
+        ttk.Label(r4, text="Custom Pattern ({base},{token},{index},{name},{ext},{sep})").pack(side="left")
+        ttk.Entry(r4, textvariable=self.meta_custom_pattern).pack(side="left", fill="x", expand=True, padx=(6, 0))
+
+    def _build_rename_options(self) -> None:
+        r1 = ttk.Frame(self.rename_frame)
+        r1.pack(fill="x", pady=(0, 8))
+        ttk.Label(r1, text="Apply To").pack(side="left")
+        ttk.Combobox(r1, textvariable=self.rename_target, values=["files", "folders", "files_and_folders"], state="readonly", width=18).pack(side="left", padx=(6, 16))
+        ttk.Checkbutton(r1, text="Include subfolders", variable=self.rename_recursive).pack(side="left")
+
+        r2 = ttk.Frame(self.rename_frame)
+        r2.pack(fill="x", pady=(0, 8))
+        ttk.Label(r2, text="Scheme").pack(side="left")
+        ttk.Combobox(r2, textvariable=self.rename_mode, values=["numeric", "alpha", "roman"], state="readonly", width=12).pack(side="left", padx=(6, 16))
+        ttk.Label(r2, text="Placement").pack(side="left")
+        ttk.Combobox(r2, textvariable=self.rename_placement, values=["prefix", "suffix", "replace"], state="readonly", width=10).pack(side="left", padx=(6, 16))
+        ttk.Label(r2, text="Sort").pack(side="left")
+        ttk.Combobox(r2, textvariable=self.rename_sort, values=["name", "created", "modified"], state="readonly", width=10).pack(side="left")
+
+        r3 = ttk.Frame(self.rename_frame)
+        r3.pack(fill="x", pady=(0, 8))
+        for label, var, w in [("Start", self.rename_start, 6), ("Padding", self.rename_padding, 6), ("Separator", self.rename_separator, 8)]:
+            ttk.Label(r3, text=label).pack(side="left")
+            ttk.Entry(r3, textvariable=var, width=w).pack(side="left", padx=(6, 16))
+
+        r4 = ttk.Frame(self.rename_frame)
+        r4.pack(fill="x", pady=(0, 8))
+        ttk.Label(r4, text="Fixed Prefix").pack(side="left")
+        ttk.Entry(r4, textvariable=self.rename_prefix_text, width=18).pack(side="left", padx=(6, 16))
+        ttk.Label(r4, text="Fixed Suffix").pack(side="left")
+        ttk.Entry(r4, textvariable=self.rename_suffix_text, width=18).pack(side="left")
+
+        r5 = ttk.Frame(self.rename_frame)
+        r5.pack(fill="x")
+        ttk.Label(r5, text="Custom Pattern ({name},{ext},{token},{index})").pack(side="left")
+        ttk.Entry(r5, textvariable=self.rename_custom_pattern).pack(side="left", fill="x", expand=True, padx=(6, 0))
+
+    def refresh_option_panels(self) -> None:
+        for frame in (self.timestamp_frame, self.meta_frame, self.rename_frame):
+            frame.pack_forget()
+        {"timestamps": self.timestamp_frame, "metadata": self.meta_frame, "rename": self.rename_frame}[self.operation.get()].pack(fill="x")
+
+    @staticmethod
+    def ps_escape(value: str) -> str:
+        return value.replace("'", "''")
 
         self.refresh_option_panels()
 
@@ -209,6 +350,8 @@ class FileMetadataBulkEditor(tk.Tk):
         folder = self.validate_folder()
         if not folder:
             return
+        builder = {"timestamps": self.build_timestamp_script, "metadata": self.build_metadata_script, "rename": self.build_rename_script}[self.operation.get()]
+        script = builder(folder)
         builders = {
             "timestamps": self.build_timestamp_script,
             "mp3_title": self.build_mp3_title_script,
@@ -223,6 +366,115 @@ class FileMetadataBulkEditor(tk.Tk):
         target = self.validate_datetime()
         if not target:
             return None
+        if not any([self.change_created.get(), self.change_modified.get(), self.change_accessed.get()]):
+            messagebox.showerror("No Timestamp Selected", "Select at least one timestamp field.")
+            return None
+        folder = self.ps_escape(folder)
+        lines = []
+        if self.change_created.get():
+            lines.append("        $_.CreationTime = $targetDate")
+        if self.change_modified.get():
+            lines.append("        $_.LastWriteTime = $targetDate")
+        if self.change_accessed.get():
+            lines.append("        $_.LastAccessTime = $targetDate")
+        block = "\n".join(lines)
+        return f"""$folderPath = '{folder}'
+$targetDate = Get-Date '{target}'
+if (Test-Path -LiteralPath $folderPath) {{
+    if ({str(self.include_root.get()).lower()}) {{
+        Get-Item -LiteralPath $folderPath -Force | ForEach-Object {{
+{block}
+        }}
+    }}
+    Get-ChildItem -LiteralPath $folderPath -Recurse -Force | ForEach-Object {{
+{block}
+    }}
+}}
+Write-Host 'Done.'
+"""
+
+    def _token_expr(self, mode: str) -> str:
+        if mode == "numeric":
+            return "$token = ($i).ToString().PadLeft($padding, '0')"
+        if mode == "alpha":
+            return "$token = [char](64 + $i)"
+        return "$roman=@('I','II','III','IV','V','VI','VII','VIII','IX','X'); $token = if($i -le 10){$roman[$i-1]} else {$i}"
+
+    def _validate_counter_values(self, start_raw: str, padding_raw: str) -> tuple[int, int] | None:
+        try:
+            start = int(start_raw.strip())
+            padding = int(padding_raw.strip())
+            if padding < 0:
+                raise ValueError
+            return start, padding
+        except ValueError:
+            messagebox.showerror("Invalid Counter Settings", "Start/Padding must be valid integers (padding >= 0).")
+            return None
+
+    def build_metadata_script(self, folder: str) -> str | None:
+        values = self._validate_counter_values(self.meta_start.get(), self.meta_padding.get())
+        if not values:
+            return None
+        start, padding = values
+        field = self.meta_field.get()
+        index = COMMON_METADATA_FIELDS[field]
+        folder = self.ps_escape(folder)
+        target_map = {"files": "-File", "folders": "-Directory", "files_and_folders": ""}
+        recurse = "-Recurse" if self.meta_recursive.get() else ""
+        token_expr = self._token_expr(self.meta_mode_token.get())
+
+        return f"""# Power Metadata Editor
+$folderPath = '{folder}'
+$fieldIndex = {index}
+$mode = '{self.meta_mode.get()}'
+$base = '{self.ps_escape(self.meta_base_text.get())}'
+$start = {start}
+$padding = {padding}
+$sep = '{self.ps_escape(self.meta_separator.get())}'
+$pattern = '{self.ps_escape(self.meta_custom_pattern.get())}'
+
+$shell = New-Object -ComObject Shell.Application
+$items = Get-ChildItem -LiteralPath $folderPath {recurse} -Force {target_map[self.meta_target.get()]} | Sort-Object {self.meta_sort.get()}
+$counter = 0
+foreach($item in $items) {{
+    $counter++
+    $i = $start + $counter - 1
+    {token_expr}
+    $name = [System.IO.Path]::GetFileNameWithoutExtension($item.Name)
+    $ext = [System.IO.Path]::GetExtension($item.Name)
+
+    switch($mode) {{
+        'clear' {{ $value = '' }}
+        'fixed_value' {{ $value = $base }}
+        'counter_only' {{ $value = $token }}
+        'base_plus_counter' {{ $value = "$base$sep$token" }}
+        'custom_pattern' {{ $value = $pattern.Replace('{{base}}',$base).Replace('{{token}}',$token).Replace('{{index}}',$i).Replace('{{name}}',$name).Replace('{{ext}}',$ext).Replace('{{sep}}',$sep) }}
+    }}
+
+    $dir = Split-Path -Parent $item.FullName
+    $leaf = Split-Path -Leaf $item.FullName
+    $ns = $shell.Namespace($dir)
+    if ($null -ne $ns) {{
+        $entry = $ns.ParseName($leaf)
+        if ($null -ne $entry) {{
+            $ns.SetDetailsOf($entry, $fieldIndex, $value)
+            Write-Host "Updated {field}: $($item.FullName) -> $value"
+        }}
+    }}
+}}
+Write-Host 'Done.'
+"""
+
+    def build_rename_script(self, folder: str) -> str | None:
+        parsed = self._validate_counter_values(self.rename_start.get(), self.rename_padding.get())
+        if not parsed:
+            return None
+        start, padding = parsed
+        cfg = RenameConfig(self.rename_mode.get(), self.rename_placement.get(), self.rename_separator.get(), start, padding, self.rename_prefix_text.get(), self.rename_suffix_text.get(), self.rename_custom_pattern.get())
+        folder = self.ps_escape(folder)
+        target_map = {"files": "-File", "folders": "-Directory", "files_and_folders": ""}
+        recurse = "-Recurse" if self.rename_recursive.get() else ""
+        return f"""# Power Rename
         folder = self.ps_escape(folder)
         return f"$folderPath = '{folder}'\n$targetDate = Get-Date '{target}'\n# Timestamp script omitted for brevity in this modernization build.\n"
 
@@ -265,12 +517,14 @@ $fixedPrefix = '{self.ps_escape(cfg.prefix_text)}'
 $fixedSuffix = '{self.ps_escape(cfg.suffix_text)}'
 $pattern = '{self.ps_escape(cfg.custom_pattern)}'
 
+$items = Get-ChildItem -LiteralPath $folderPath {recurse} -Force {target_map[self.rename_target.get()]} | Sort-Object {self.rename_sort.get()}
 $items = Get-ChildItem -LiteralPath $folderPath {recurse} -Force {target_map[self.rename_target.get()]}
 $items = $items | Sort-Object {self.rename_sort.get()}
 $index = 0
 foreach($item in $items) {{
     $index++
     $i = $start + $index - 1
+    {self._token_expr(cfg.mode)}
     {scheme_func}
     $name = [System.IO.Path]::GetFileNameWithoutExtension($item.Name)
     $ext = [System.IO.Path]::GetExtension($item.Name)
@@ -290,6 +544,17 @@ Write-Host 'Done.'
 """
 
     def copy_script(self) -> None:
+        text = self.preview.get("1.0", "end").strip()
+        if not text:
+            messagebox.showinfo("Nothing to Copy", "Generate a script first.")
+            return
+        self.clipboard_clear()
+        self.clipboard_append(text)
+        messagebox.showinfo("Copied", "Script copied to clipboard.")
+
+    def save_script(self) -> None:
+        text = self.preview.get("1.0", "end").strip()
+        if not text:
         script = self.preview.get("1.0", "end").strip()
         if not script:
             messagebox.showinfo("Nothing to Copy", "Generate a script first.")
@@ -307,6 +572,7 @@ Write-Host 'Done.'
         if not path:
             return
         with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
             f.write(script)
         messagebox.showinfo("Saved", f"Script saved to:\n{path}")
 
