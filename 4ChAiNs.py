@@ -7,13 +7,25 @@ from pathlib import Path
 from urllib import request, error, parse
 
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, messagebox
 
 from typing import Optional
 
 
 APP_NAME = "Chan & Reddit Clean Reader"
 PREFS_FILENAME = ".chan_reddit_reader_prefs.json"
+TOP_SUBREDDITS = [
+    "all","announcements","AskReddit","funny","gaming","aww","worldnews","todayilearned",
+    "movies","pics","science","news","IAmA","Showerthoughts","mildlyinteresting","videos",
+    "Music","Jokes","LifeProTips","explainlikeimfive","OldSchoolCool","space","sports","nottheonion",
+    "EarthPorn","food","DIY","Art","books","history",
+]
+
+COLOR_CHOICES = [
+    "black","white","gray10","gray20","gray30","gray40","gray50","gray60","gray70","gray80",
+    "red","tomato","orange","gold","yellow","green","lime","teal","cyan","skyblue",
+    "blue","navy","steelblue","purple","magenta","pink","brown","sienna",
+]
 
 
 def get_prefs_path() -> Path:
@@ -42,6 +54,8 @@ def load_preferences() -> dict:
         "recent": [],
         "proxy": "",
         "font_size": 11,
+        "theme_name": "Dark",
+        "custom_theme": {},
     }
     path = get_prefs_path()
     if not path.exists():
@@ -188,8 +202,11 @@ class ReaderApp(tk.Tk):
         self.boards_info: dict[str, dict] = {}
 
         self._auto_refresh_job: Optional[str] = None
+        self.theme_tokens = {}
+        self._style_theme = ttk.Style(self)
 
         self._build_style()
+        self._build_menu()
         self._build_widgets()
         self._bind_shortcuts()
 
@@ -225,20 +242,61 @@ class ReaderApp(tk.Tk):
         """
         Configure a simple dark theme using ttk.
         """
-        style = ttk.Style(self)
         try:
-            style.theme_use("clam")
+            self._style_theme.theme_use("clam")
         except tk.TclError:
             pass
-        style.configure("TFrame", background="#1e1f22")
-        style.configure("TLabel", background="#1e1f22", foreground="#f0f0f0")
-        style.configure("Header.TLabel", font=("Segoe UI", 11, "bold"))
-        style.configure("TButton", padding=(6, 3))
-        style.configure("Treeview", rowheight=22)
-        style.map(
+        self._style_theme.configure("Header.TLabel", font=("Segoe UI", 11, "bold"))
+        self._style_theme.configure("TButton", padding=(6, 3))
+        self._style_theme.configure("Treeview", rowheight=22)
+        self._style_theme.map(
             "TButton",
             relief=[("pressed", "sunken"), ("active", "raised")],
         )
+        self._init_themes()
+        self.apply_theme(self.prefs.get("theme_name", "Dark"))
+
+    def _init_themes(self) -> None:
+        """
+        Initialize built-in themes and an optional saved custom theme.
+        """
+        self.themes = {
+            "Dark": {"bg":"#1e1f22","panel":"#2a2c31","fg":"#f0f0f0","muted":"#c1c1c1","accent":"#8ab4f8","text_bg":"#121212","status_bg":"#101010","search_bg":"#555555"},
+            "Light Professional": {"bg":"#f3f5f7","panel":"#ffffff","fg":"#1f2937","muted":"#475569","accent":"#1d4ed8","text_bg":"#ffffff","status_bg":"#f8fafc","search_bg":"#dbeafe"},
+            "Blue/Steel": {"bg":"#1b2635","panel":"#27384c","fg":"#e8eef5","muted":"#c5d1dd","accent":"#63b3ed","text_bg":"#0f1b2a","status_bg":"#132235","search_bg":"#355c7d"},
+            "High Contrast": {"bg":"#000000","panel":"#111111","fg":"#ffffff","muted":"#ffffff","accent":"#00ffff","text_bg":"#000000","status_bg":"#000000","search_bg":"#ffff00"},
+        }
+        custom = self.prefs.get("custom_theme", {})
+        if custom:
+            self.themes["Custom"] = custom
+        else:
+            # Keep Custom available in menus even before first save.
+            self.themes["Custom"] = dict(self.themes["Dark"])
+
+    def _build_menu(self) -> None:
+        """
+        Build the top application menu.
+        """
+        menubar = tk.Menu(self)
+        file_menu = tk.Menu(menubar, tearoff=0)
+        file_menu.add_command(label="Refresh", command=self.refresh_current, accelerator="Ctrl+R")
+        file_menu.add_separator()
+        file_menu.add_command(label="Exit", command=self.destroy, accelerator="Ctrl+Q")
+        menubar.add_cascade(label="File", menu=file_menu)
+        view = tk.Menu(menubar, tearoff=0)
+        theme_menu = tk.Menu(view, tearoff=0)
+        for name in ["Dark","Light Professional","Blue/Steel","High Contrast","Custom"]:
+            theme_menu.add_command(label=name, command=lambda n=name: self.apply_theme(n))
+        theme_menu.add_separator()
+        theme_menu.add_command(label="Custom Theme Maker", command=self.open_custom_theme_maker)
+        view.add_cascade(label="Theme", menu=theme_menu)
+        menubar.add_cascade(label="View", menu=view)
+        help_menu = tk.Menu(menubar, tearoff=0)
+        help_menu.add_command(label="Keyboard Shortcuts", command=self.show_shortcuts)
+        help_menu.add_command(label="Tips and Tricks", command=self.show_tips)
+        help_menu.add_command(label="About", command=self.show_about)
+        menubar.add_cascade(label="Help", menu=help_menu)
+        self.config(menu=menubar)
 
     def _build_widgets(self) -> None:
         """
@@ -334,6 +392,10 @@ class ReaderApp(tk.Tk):
             reddit_row1, textvariable=self.subreddit_var, width=16
         )
         self.subreddit_entry.pack(side=tk.LEFT, padx=(4, 4))
+        self.top_sub_var = tk.StringVar(value="Top subreddits")
+        self.top_sub_combo = ttk.Combobox(reddit_row1, textvariable=self.top_sub_var, values=TOP_SUBREDDITS, state="readonly", width=18)
+        self.top_sub_combo.pack(side=tk.LEFT, padx=(0,4))
+        self.top_sub_combo.bind("<<ComboboxSelected>>", self.on_top_subreddit_selected)
         self.subreddit_sort_var = tk.StringVar(value="hot")
         sort_combo = ttk.Combobox(
             reddit_row1,
@@ -547,6 +609,7 @@ class ReaderApp(tk.Tk):
         self.bind("<Control-plus>", lambda e: self.adjust_font_size(1))
         self.bind("<Control-minus>", lambda e: self.adjust_font_size(-1))
         self.bind("<Control-=>", lambda e: self.adjust_font_size(1))
+        self.bind("<Control-q>", lambda e: self.destroy())
 
     def _focus_search(self) -> None:
         """
@@ -562,6 +625,108 @@ class ReaderApp(tk.Tk):
         self.focus()
         if hasattr(self, "site_combo"):
             self.site_combo.focus_set()
+
+    def on_top_subreddit_selected(self, _event=None) -> None:
+        chosen = self.top_sub_var.get().strip()
+        if chosen:
+            self.subreddit_var.set(chosen)
+            self.load_subreddit_posts()
+
+    def apply_theme(self, name: str) -> None:
+        """
+        Apply a theme immediately to styled and Tk widgets.
+        """
+        if name not in self.themes:
+            return
+        t = self.themes[name]
+        self.theme_tokens = t
+        s = self._style_theme
+        s.configure("TFrame", background=t["bg"])
+        s.configure("TLabel", background=t["bg"], foreground=t["fg"])
+        s.configure("TLabelframe", background=t["panel"], foreground=t["fg"])
+        s.configure("TLabelframe.Label", background=t["panel"], foreground=t["fg"])
+        s.configure("TCheckbutton", background=t["bg"], foreground=t["fg"])
+        s.configure("TMenubutton", background=t["panel"], foreground=t["fg"])
+        self.configure(background=t["bg"])
+        if hasattr(self, "reader_text"):
+            self.reader_text.configure(background=t["text_bg"], foreground=t["fg"], insertbackground=t["fg"])
+            self.status_text.configure(background=t["status_bg"], foreground=t["muted"], insertbackground=t["fg"])
+            self.reader_text.tag_config("search_hit", background=t["search_bg"], foreground=t["fg"])
+            self.reader_text.tag_config("username", foreground=t["accent"])
+            self.reader_text.tag_config("thread_title", foreground=t["fg"])
+        self.prefs["theme_name"] = name
+        save_preferences(self.prefs)
+
+    def open_custom_theme_maker(self) -> None:
+        """
+        Open a simple custom theme editor with live preview.
+        """
+        win = tk.Toplevel(self)
+        win.title("Custom Theme Maker")
+        win.geometry("540x360")
+        win.resizable(False, False)
+        areas = [("bg","Window Background"),("panel","Panels"),("fg","Main Text"),("muted","Secondary Text"),("accent","Accent/Usernames"),("text_bg","Reader Background"),("status_bg","Status Background"),("search_bg","Search Highlight")]
+        current = dict(self.themes.get(self.prefs.get("theme_name","Dark"), self.themes["Dark"]))
+        vars_map = {}
+        preview_frame = ttk.LabelFrame(win, text="Preview", padding=8)
+        preview_frame.grid(row=0, column=2, rowspan=len(areas)+1, padx=(10, 8), pady=8, sticky="ns")
+        preview_label = tk.Label(preview_frame, text="Aa Preview Text", width=18)
+        preview_label.pack(pady=(4, 6))
+        preview_muted = tk.Label(preview_frame, text="Muted text", width=18)
+        preview_muted.pack(pady=(0, 6))
+        preview_box = tk.Label(preview_frame, text="Reader area", width=18, height=4)
+        preview_box.pack()
+
+        for i,(k,label) in enumerate(areas):
+            ttk.Label(win, text=label).grid(row=i,column=0,sticky="w",padx=8,pady=4)
+            v = tk.StringVar(value=current.get(k, "white"))
+            vars_map[k] = v
+            combo = ttk.Combobox(win, textvariable=v, values=[f"{c} ■" for c in COLOR_CHOICES], width=20, state="readonly")
+            combo.grid(row=i,column=1,sticky="w")
+            combo.bind(
+                "<<ComboboxSelected>>",
+                lambda e: self._preview_custom(vars_map, preview_label, preview_muted, preview_box),
+            )
+        self._preview_custom(vars_map, preview_label, preview_muted, preview_box)
+        ttk.Button(win, text="Save & Apply", command=lambda: self._save_custom_theme(vars_map, win)).grid(row=len(areas),column=1,sticky="e",pady=10)
+
+    def _preview_custom(self, vars_map: dict, preview_label=None, preview_muted=None, preview_box=None) -> None:
+        """
+        Live preview custom theme in app and optional sample widgets.
+        """
+        theme = {k: v.get().split()[0] for k, v in vars_map.items()}
+        self.themes["Custom"] = theme
+        self.apply_theme("Custom")
+        if preview_label:
+            preview_label.configure(bg=theme["panel"], fg=theme["fg"])
+            preview_muted.configure(bg=theme["panel"], fg=theme["muted"])
+            preview_box.configure(bg=theme["text_bg"], fg=theme["accent"])
+
+    def _save_custom_theme(self, vars_map: dict, window) -> None:
+        theme = {k: v.get().split()[0] for k, v in vars_map.items()}
+        self.themes["Custom"] = theme
+        self.prefs["custom_theme"] = theme
+        save_preferences(self.prefs)
+        self.apply_theme("Custom")
+        window.destroy()
+
+    def show_shortcuts(self) -> None:
+        messagebox.showinfo(
+            "Keyboard Shortcuts",
+            "Ctrl+F: Find in thread\n"
+            "Ctrl+L: Focus site selector\n"
+            "Ctrl+R: Refresh current view\n"
+            "Ctrl+B: Bookmark current thread\n"
+            "Ctrl+S: Cycle image mode\n"
+            "Ctrl++ / Ctrl+-: Font size\n"
+            "Ctrl+Q: Quit\n"
+            "Enter: Open selected thread\n"
+            "Tab: Move focus between selectors/list",
+        )
+    def show_tips(self) -> None:
+        messagebox.showinfo("Tips and Tricks", "Use the subreddit dropdown for quick navigation.\nUse bookmarks to save favorites.\nEnable auto-refresh for live discussions.\nUse theme menu to match lighting/accessibility.")
+    def show_about(self) -> None:
+        messagebox.showinfo("About", f"{APP_NAME}\nA clean 4chan + Reddit reader built with Python stdlib + Tkinter.")
 
     def adjust_font_size(self, delta: int) -> None:
         """
