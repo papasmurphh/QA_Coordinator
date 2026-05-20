@@ -3,6 +3,7 @@ import threading
 import time
 import html
 import webbrowser
+import base64
 from pathlib import Path
 from urllib import request, error, parse
 
@@ -197,6 +198,9 @@ class ReaderApp(tk.Tk):
         self.current_board = self.prefs.get("current_board", "g")
         self.current_subreddit = self.prefs.get("current_subreddit", "all")
         self.current_thread_descriptor: Optional[dict] = None
+        self.current_thread_url: Optional[str] = None
+        self.current_image_urls: list[str] = []
+        self._image_cache: list[tk.PhotoImage] = []
 
         # board name -> {title, meta}
         self.boards_info: dict[str, dict] = {}
@@ -434,8 +438,10 @@ class ReaderApp(tk.Tk):
         self.thread_list.bind("<KeyRelease-Up>", lambda e: self.on_thread_selected())
         self.thread_list.bind("<KeyRelease-Down>", lambda e: self.on_thread_selected())
         self.thread_list.bind("<Return>", self.on_thread_enter)
+        self.thread_list.bind("<Double-Button-1>", lambda e: self.open_current_thread_in_browser())
         self.thread_list.bind("<Tab>", self.on_threads_tab)
         Tooltip(self.thread_list, "Select a thread to view in the reader")
+        ttk.Button(left, text="Open Selected Thread in Browser", command=self.open_current_thread_in_browser).pack(fill=tk.X, pady=(4, 0))
 
         # Bookmarks
         bookmarks_label = ttk.Label(left, text="Bookmarks", style="Header.TLabel")
@@ -542,10 +548,21 @@ class ReaderApp(tk.Tk):
         )
         search_btn.pack(side=tk.LEFT, padx=(2, 0))
         Tooltip(search_btn, "Search within the current thread text")
+        open_browser_btn = ttk.Button(
+            reader_controls, text="Open in Browser", command=self.open_current_thread_in_browser
+        )
+        open_browser_btn.pack(side=tk.LEFT, padx=(8, 0))
 
-        # Reader text widget
+        # Reader + image preview area
+        content_pane = ttk.PanedWindow(reader_tab, orient=tk.HORIZONTAL)
+        content_pane.pack(fill=tk.BOTH, expand=True)
+        text_wrap = ttk.Frame(content_pane)
+        image_wrap = ttk.LabelFrame(content_pane, text="Images", padding=6)
+        content_pane.add(text_wrap, weight=4)
+        content_pane.add(image_wrap, weight=2)
+
         self.reader_text = tk.Text(
-            reader_tab,
+            text_wrap,
             wrap=tk.WORD,
             state="disabled",
             background="#121212",
@@ -555,6 +572,15 @@ class ReaderApp(tk.Tk):
             pady=8,
         )
         self.reader_text.pack(fill=tk.BOTH, expand=True)
+        self.image_list = tk.Listbox(image_wrap, height=8, exportselection=False)
+        self.image_list.pack(fill=tk.BOTH, expand=True)
+        self.image_list.bind("<Double-Button-1>", lambda e: self.open_selected_image_in_browser())
+        img_btn_row = ttk.Frame(image_wrap)
+        img_btn_row.pack(fill=tk.X, pady=(6, 0))
+        ttk.Button(img_btn_row, text="Open Image", command=self.open_selected_image_in_browser).pack(side=tk.LEFT)
+        ttk.Button(img_btn_row, text="Load Preview", command=self.load_selected_image_preview).pack(side=tk.LEFT, padx=(6, 0))
+        self.image_preview = tk.Label(image_wrap, text="No image selected", anchor="center")
+        self.image_preview.pack(fill=tk.BOTH, expand=True, pady=(6, 0))
         reader_font_size = int(self.prefs.get("font_size", 11))
         self._set_reader_font_size(reader_font_size)
 
@@ -1061,6 +1087,7 @@ class ReaderApp(tk.Tk):
         thread_no = descriptor.get("thread_no")
         if not board or not thread_no:
             return
+        self.current_thread_url = f"https://boards.4chan.org/{board}/thread/{thread_no}"
 
         def worker():
             self.log(f"Loading thread {thread_no} on /{board}/...")
@@ -1081,6 +1108,10 @@ class ReaderApp(tk.Tk):
         """
         self.reader_text.configure(state="normal")
         self.reader_text.delete("1.0", tk.END)
+        self.current_image_urls = []
+        self.image_list.delete(0, tk.END)
+        self.image_preview.configure(image="", text="No image selected")
+        self._image_cache.clear()
 
         keyword_filter = [w.lower() for w in self.prefs.get("keyword_filter", [])]
         id_filter = [s.strip() for s in self.prefs.get("poster_filter_4chan", [])]
@@ -1117,12 +1148,14 @@ class ReaderApp(tk.Tk):
                         tk.END, "[image blurred]\n\n", ("image_placeholder",)
                     )
                 else:
-                    # Show a clickable link to open image in browser
+                    # Show inline list entry and clickable link
                     board = self.current_board
                     tim = post.get("tim")
                     ext = post.get("ext", "")
                     if tim and ext:
                         url = f"https://i.4cdn.org/{board}/{tim}{ext}"
+                        self.current_image_urls.append(url)
+                        self.image_list.insert(tk.END, url.rsplit("/", 1)[-1])
                         start = self.reader_text.index(tk.END)
                         self.reader_text.insert(
                             tk.END, "[open image]\n\n", ("image_link",)
@@ -1144,6 +1177,8 @@ class ReaderApp(tk.Tk):
         self.reader_text.tag_config("image_link", underline=True)
         self.reader_text.configure(state="disabled")
         self.reader_text.see("1.0")
+        if self.current_image_urls:
+            self.log(f"Found {len(self.current_image_urls)} image(s) in thread")
 
     # Reddit methods
 
@@ -1212,6 +1247,7 @@ class ReaderApp(tk.Tk):
         post_id = descriptor.get("id")
         if not sub or not post_id:
             return
+        self.current_thread_url = f"https://www.reddit.com/r/{parse.quote(sub)}/comments/{post_id}/"
 
         def worker():
             self.log(f"Loading Reddit thread {post_id} in r/{sub}...")
@@ -1248,6 +1284,10 @@ class ReaderApp(tk.Tk):
         """
         self.reader_text.configure(state="normal")
         self.reader_text.delete("1.0", tk.END)
+        self.current_image_urls = []
+        self.image_list.delete(0, tk.END)
+        self.image_preview.configure(image="", text="No image selected")
+        self._image_cache.clear()
 
         keyword_filter = [w.lower() for w in self.prefs.get("keyword_filter", [])]
         author_filter = [s.strip() for s in self.prefs.get("author_filter_reddit", [])]
@@ -1256,6 +1296,10 @@ class ReaderApp(tk.Tk):
         author = post_data.get("author") or "unknown"
         self.reader_text.insert(tk.END, f"{title}\n", ("thread_title",))
         self.reader_text.insert(tk.END, f"by u/{author}\n\n", ("username",))
+        maybe_image = post_data.get("url_overridden_by_dest") or post_data.get("url")
+        if isinstance(maybe_image, str) and any(maybe_image.lower().endswith(ext) for ext in (".png", ".jpg", ".jpeg", ".gif", ".webp")):
+            self.current_image_urls.append(maybe_image)
+            self.image_list.insert(tk.END, maybe_image.rsplit("/", 1)[-1])
 
         self.reader_text.tag_config(
             "thread_title",
@@ -1282,6 +1326,50 @@ class ReaderApp(tk.Tk):
         )
         self.reader_text.configure(state="disabled")
         self.reader_text.see("1.0")
+
+    def open_current_thread_in_browser(self) -> None:
+        """
+        Open the currently selected conversation in the system browser.
+        """
+        if not self.current_thread_url:
+            self.log("No thread selected to open in browser")
+            return
+        webbrowser.open(self.current_thread_url)
+        self.log(f"Opened in browser: {self.current_thread_url}")
+
+    def open_selected_image_in_browser(self) -> None:
+        selection = self.image_list.curselection()
+        if not selection:
+            return
+        idx = selection[0]
+        if idx >= len(self.current_image_urls):
+            return
+        webbrowser.open(self.current_image_urls[idx])
+
+    def load_selected_image_preview(self) -> None:
+        """
+        Load selected image preview (best effort with Tk-supported formats).
+        """
+        selection = self.image_list.curselection()
+        if not selection:
+            return
+        idx = selection[0]
+        if idx >= len(self.current_image_urls):
+            return
+        url = self.current_image_urls[idx]
+        proxy = self.prefs.get("proxy") or None
+        opener = build_opener(proxy)
+        try:
+            with opener.open(url, timeout=15) as resp:
+                data = resp.read()
+            encoded = base64.b64encode(data)
+            image = tk.PhotoImage(data=encoded)
+            self._image_cache = [image]
+            self.image_preview.configure(image=image, text="")
+            self.log("Loaded image preview")
+        except Exception:
+            self.image_preview.configure(image="", text="Preview unavailable.\nClick 'Open Image' to view in browser.")
+            self.log("Image preview unsupported for this format; open in browser.")
 
     # Bookmarks and recent
 
