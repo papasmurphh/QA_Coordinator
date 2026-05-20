@@ -8,6 +8,7 @@ Builds customizable PowerShell scripts for:
 
 from __future__ import annotations
 
+import random
 import tkinter as tk
 from dataclasses import dataclass
 from datetime import datetime
@@ -61,6 +62,13 @@ class FileMetadataBulkEditor(tk.Tk):
         self.include_root = tk.BooleanVar(value=True)
         self.include_subfolders = tk.BooleanVar(value=True)
         self.include_files = tk.BooleanVar(value=True)
+        self.timestamp_mode = tk.StringVar(value="fixed")
+        self.range_start_date = tk.StringVar(value="03/01/2026")
+        self.range_end_date = tk.StringVar(value="03/31/2026")
+        self.work_start_time = tk.StringVar(value="09:00:00 AM")
+        self.work_end_time = tk.StringVar(value="05:00:00 PM")
+        self.workflow_gap_min = tk.StringVar(value="5")
+        self.workflow_gap_max = tk.StringVar(value="45")
 
         self.meta_recursive = tk.BooleanVar(value=True)
         self.meta_target = tk.StringVar(value="files")
@@ -135,6 +143,7 @@ class FileMetadataBulkEditor(tk.Tk):
         actions.pack(fill="x", pady=(0, 10))
         for text, cmd in [
             ("Generate Script", self.generate_script),
+            ("Self-Check", self.self_check),
             ("Copy Script", self.copy_script),
             ("Save .ps1", self.save_script),
             ("Clear", self.clear_preview),
@@ -180,6 +189,28 @@ class FileMetadataBulkEditor(tk.Tk):
         ttk.Checkbutton(r3, text="Include root folder", variable=self.include_root).pack(side="left", padx=(0, 16))
         ttk.Checkbutton(r3, text="Include subfolders", variable=self.include_subfolders).pack(side="left", padx=(0, 16))
         ttk.Checkbutton(r3, text="Include files", variable=self.include_files).pack(side="left")
+
+        r4 = ttk.Frame(self.timestamp_frame)
+        r4.pack(fill="x", pady=(8, 8))
+        ttk.Label(r4, text="Timestamp Mode").pack(side="left")
+        ttk.Combobox(r4, textvariable=self.timestamp_mode, values=["fixed", "workflow", "random"], state="readonly", width=12).pack(side="left", padx=(6, 14))
+
+        r5 = ttk.Frame(self.timestamp_frame)
+        r5.pack(fill="x", pady=(0, 8))
+        ttk.Label(r5, text="Range Start Date").pack(side="left")
+        ttk.Entry(r5, textvariable=self.range_start_date, width=12).pack(side="left", padx=(6, 10))
+        ttk.Label(r5, text="Range End Date").pack(side="left")
+        ttk.Entry(r5, textvariable=self.range_end_date, width=12).pack(side="left", padx=(6, 10))
+        ttk.Label(r5, text="Work Start").pack(side="left")
+        ttk.Entry(r5, textvariable=self.work_start_time, width=11).pack(side="left", padx=(6, 10))
+        ttk.Label(r5, text="Work End").pack(side="left")
+        ttk.Entry(r5, textvariable=self.work_end_time, width=11).pack(side="left", padx=(6, 0))
+
+        r6 = ttk.Frame(self.timestamp_frame)
+        r6.pack(fill="x")
+        ttk.Label(r6, text="Workflow gap minutes (min/max)").pack(side="left")
+        ttk.Entry(r6, textvariable=self.workflow_gap_min, width=6).pack(side="left", padx=(6, 6))
+        ttk.Entry(r6, textvariable=self.workflow_gap_max, width=6).pack(side="left")
 
     def _build_metadata_options(self) -> None:
         r1 = ttk.Frame(self.meta_frame)
@@ -283,6 +314,43 @@ class FileMetadataBulkEditor(tk.Tk):
             messagebox.showerror("Invalid Date/Time", "Expected Date: 03/11/2026 and Time: 12:00:00 PM")
             return None
 
+    def _validate_time(self, value: str) -> datetime | None:
+        try:
+            return datetime.strptime(value.strip(), "%I:%M:%S %p")
+        except ValueError:
+            return None
+
+    def _validate_timestamp_range(self) -> tuple[str, str, str, str, int, int] | None:
+        try:
+            start_d = datetime.strptime(self.range_start_date.get().strip(), "%m/%d/%Y")
+            end_d = datetime.strptime(self.range_end_date.get().strip(), "%m/%d/%Y")
+        except ValueError:
+            messagebox.showerror("Invalid Date Range", "Use mm/dd/yyyy for start/end dates.")
+            return None
+        if start_d > end_d:
+            messagebox.showerror("Invalid Date Range", "Range start date must be before end date.")
+            return None
+        if not self._validate_time(self.work_start_time.get()) or not self._validate_time(self.work_end_time.get()):
+            messagebox.showerror("Invalid Work Hours", "Use hh:mm:ss AM/PM for work start/end times.")
+            return None
+        try:
+            gap_min = int(self.workflow_gap_min.get().strip())
+            gap_max = int(self.workflow_gap_max.get().strip())
+        except ValueError:
+            messagebox.showerror("Invalid Gap", "Workflow gap min/max must be integers.")
+            return None
+        if gap_min < 1 or gap_max < gap_min:
+            messagebox.showerror("Invalid Gap", "Gap min must be >= 1 and max must be >= min.")
+            return None
+        return (
+            start_d.strftime("%m/%d/%Y"),
+            end_d.strftime("%m/%d/%Y"),
+            self.work_start_time.get().strip(),
+            self.work_end_time.get().strip(),
+            gap_min,
+            gap_max,
+        )
+
     def generate_script(self) -> None:
         folder = self.validate_folder()
         if not folder:
@@ -298,8 +366,12 @@ class FileMetadataBulkEditor(tk.Tk):
             self.preview.insert("1.0", script)
 
     def build_timestamp_script(self, folder: str) -> str | None:
-        target = self.validate_datetime()
-        if not target:
+        mode = self.timestamp_mode.get()
+        target = self.validate_datetime() if mode == "fixed" else None
+        if mode == "fixed" and not target:
+            return None
+        range_values = self._validate_timestamp_range() if mode in {"workflow", "random"} else None
+        if mode in {"workflow", "random"} and not range_values:
             return None
 
         if not any([self.change_created.get(), self.change_modified.get(), self.change_accessed.get()]):
@@ -320,12 +392,15 @@ class FileMetadataBulkEditor(tk.Tk):
         include_subfolders = "$true" if self.include_subfolders.get() else "$false"
         include_files = "$true" if self.include_files.get() else "$false"
 
-        return f"""# Power Timestamp Update
+        base = f"""# Power Timestamp Update
 $folderPath = '{folder}'
-$targetDate = Get-Date '{target}'
 $includeRoot = {include_root}
 $includeSubfolders = {include_subfolders}
 $includeFiles = {include_files}
+"""
+        if mode == "fixed":
+            return base + f"""
+$targetDate = Get-Date '{target}'
 
 if ($includeRoot) {{
     Get-Item -LiteralPath $folderPath -Force | ForEach-Object {{
@@ -348,6 +423,81 @@ if ($includeSubfolders -or $includeFiles) {{
 
 Write-Host 'Done.'
 """
+        start_d, end_d, work_start, work_end, gap_min, gap_max = range_values
+        randomize = "$true" if mode == "random" else "$false"
+        return base + f"""
+$rangeStartDate = Get-Date '{start_d}'
+$rangeEndDate = Get-Date '{end_d}'
+$workStart = [datetime]::ParseExact('{work_start}', 'hh:mm:ss tt', $null)
+$workEnd = [datetime]::ParseExact('{work_end}', 'hh:mm:ss tt', $null)
+$gapMin = {gap_min}
+$gapMax = {gap_max}
+$randomize = {randomize}
+
+$allItems = @()
+if ($includeRoot) {{ $allItems += Get-Item -LiteralPath $folderPath -Force }}
+if ($includeSubfolders -or $includeFiles) {{
+    $child = Get-ChildItem -LiteralPath $folderPath -Recurse -Force
+    if ($includeSubfolders -and -not $includeFiles) {{
+        $child = $child | Where-Object {{ $_.PSIsContainer }}
+    }} elseif ($includeFiles -and -not $includeSubfolders) {{
+        $child = $child | Where-Object {{ -not $_.PSIsContainer }}
+    }}
+    $allItems += $child
+}}
+$allItems = $allItems | Sort-Object FullName
+
+$dayCount = [int]($rangeEndDate.Date - $rangeStartDate.Date).TotalDays + 1
+$cursor = [datetime]::ParseExact(\"$($rangeStartDate.ToString('MM/dd/yyyy')) $($workStart.ToString('hh:mm:ss tt'))\", 'MM/dd/yyyy hh:mm:ss tt', $null)
+
+foreach($it in $allItems) {{
+    if ($randomize) {{
+        $dayOffset = Get-Random -Minimum 0 -Maximum $dayCount
+        $datePart = $rangeStartDate.Date.AddDays($dayOffset)
+        $startMin = ($workStart.Hour * 60 + $workStart.Minute)
+        $endMin = ($workEnd.Hour * 60 + $workEnd.Minute)
+        $minuteOffset = Get-Random -Minimum 0 -Maximum (($endMin - $startMin) + 1)
+        $targetDate = $datePart.AddMinutes($startMin + $minuteOffset)
+    }} else {{
+        $targetDate = $cursor
+        $addMin = Get-Random -Minimum $gapMin -Maximum ($gapMax + 1)
+        $cursor = $cursor.AddMinutes($addMin)
+        if ($cursor.TimeOfDay -gt $workEnd.TimeOfDay) {{
+            $cursor = $cursor.Date.AddDays(1).Add($workStart.TimeOfDay)
+        }}
+        if ($cursor.Date -gt $rangeEndDate.Date) {{
+            $cursor = $rangeStartDate.Date.Add($workStart.TimeOfDay)
+        }}
+    }}
+    $_ = $it
+{block}
+}}
+Write-Host 'Done.'
+"""
+
+    def self_check(self) -> None:
+        folder = self.validate_folder()
+        if not folder:
+            return
+        issues: list[str] = []
+        if self.operation.get() == "timestamps":
+            if not any([self.change_created.get(), self.change_modified.get(), self.change_accessed.get()]):
+                issues.append("Select at least one timestamp field.")
+            if self.timestamp_mode.get() == "fixed" and not self.validate_datetime():
+                issues.append("Fixed mode requires valid date/time.")
+            if self.timestamp_mode.get() in {"workflow", "random"} and not self._validate_timestamp_range():
+                issues.append("Workflow/Random mode requires valid date range, work hours, and gaps.")
+        elif self.operation.get() == "metadata":
+            if not self._validate_counter_values(self.meta_start.get(), self.meta_padding.get()):
+                issues.append("Metadata counter start/padding are invalid.")
+        elif self.operation.get() == "rename":
+            if not self._validate_counter_values(self.rename_start.get(), self.rename_padding.get()):
+                issues.append("Rename counter start/padding are invalid.")
+
+        if issues:
+            messagebox.showerror("Self-Check Failed", "\n".join(f"- {i}" for i in issues))
+        else:
+            messagebox.showinfo("Self-Check", "All settings look valid for script generation.")
 
     def _token_expr(self, mode: str) -> str:
         if mode == "numeric":
