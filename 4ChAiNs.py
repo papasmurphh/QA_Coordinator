@@ -3,17 +3,30 @@ import threading
 import time
 import html
 import webbrowser
+import base64
 from pathlib import Path
 from urllib import request, error, parse
 
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, messagebox
 
 from typing import Optional
 
 
 APP_NAME = "Chan & Reddit Clean Reader"
 PREFS_FILENAME = ".chan_reddit_reader_prefs.json"
+TOP_SUBREDDITS = [
+    "all","announcements","AskReddit","funny","gaming","aww","worldnews","todayilearned",
+    "movies","pics","science","news","IAmA","Showerthoughts","mildlyinteresting","videos",
+    "Music","Jokes","LifeProTips","explainlikeimfive","OldSchoolCool","space","sports","nottheonion",
+    "EarthPorn","food","DIY","Art","books","history",
+]
+
+COLOR_CHOICES = [
+    "black","white","gray10","gray20","gray30","gray40","gray50","gray60","gray70","gray80",
+    "red","tomato","orange","gold","yellow","green","lime","teal","cyan","skyblue",
+    "blue","navy","steelblue","purple","magenta","pink","brown","sienna",
+]
 
 
 def get_prefs_path() -> Path:
@@ -42,6 +55,8 @@ def load_preferences() -> dict:
         "recent": [],
         "proxy": "",
         "font_size": 11,
+        "theme_name": "Dark",
+        "custom_theme": {},
     }
     path = get_prefs_path()
     if not path.exists():
@@ -183,13 +198,19 @@ class ReaderApp(tk.Tk):
         self.current_board = self.prefs.get("current_board", "g")
         self.current_subreddit = self.prefs.get("current_subreddit", "all")
         self.current_thread_descriptor: Optional[dict] = None
+        self.current_thread_url: Optional[str] = None
+        self.current_image_urls: list[str] = []
+        self._image_cache: list[tk.PhotoImage] = []
 
         # board name -> {title, meta}
         self.boards_info: dict[str, dict] = {}
 
         self._auto_refresh_job: Optional[str] = None
+        self.theme_tokens = {}
+        self._style_theme = ttk.Style(self)
 
         self._build_style()
+        self._build_menu()
         self._build_widgets()
         self._bind_shortcuts()
 
@@ -225,20 +246,61 @@ class ReaderApp(tk.Tk):
         """
         Configure a simple dark theme using ttk.
         """
-        style = ttk.Style(self)
         try:
-            style.theme_use("clam")
+            self._style_theme.theme_use("clam")
         except tk.TclError:
             pass
-        style.configure("TFrame", background="#1e1f22")
-        style.configure("TLabel", background="#1e1f22", foreground="#f0f0f0")
-        style.configure("Header.TLabel", font=("Segoe UI", 11, "bold"))
-        style.configure("TButton", padding=(6, 3))
-        style.configure("Treeview", rowheight=22)
-        style.map(
+        self._style_theme.configure("Header.TLabel", font=("Segoe UI", 11, "bold"))
+        self._style_theme.configure("TButton", padding=(6, 3))
+        self._style_theme.configure("Treeview", rowheight=22)
+        self._style_theme.map(
             "TButton",
             relief=[("pressed", "sunken"), ("active", "raised")],
         )
+        self._init_themes()
+        self.apply_theme(self.prefs.get("theme_name", "Dark"))
+
+    def _init_themes(self) -> None:
+        """
+        Initialize built-in themes and an optional saved custom theme.
+        """
+        self.themes = {
+            "Dark": {"bg":"#1e1f22","panel":"#2a2c31","fg":"#f0f0f0","muted":"#c1c1c1","accent":"#8ab4f8","text_bg":"#121212","status_bg":"#101010","search_bg":"#555555"},
+            "Light Professional": {"bg":"#f3f5f7","panel":"#ffffff","fg":"#1f2937","muted":"#475569","accent":"#1d4ed8","text_bg":"#ffffff","status_bg":"#f8fafc","search_bg":"#dbeafe"},
+            "Blue/Steel": {"bg":"#1b2635","panel":"#27384c","fg":"#e8eef5","muted":"#c5d1dd","accent":"#63b3ed","text_bg":"#0f1b2a","status_bg":"#132235","search_bg":"#355c7d"},
+            "High Contrast": {"bg":"#000000","panel":"#111111","fg":"#ffffff","muted":"#ffffff","accent":"#00ffff","text_bg":"#000000","status_bg":"#000000","search_bg":"#ffff00"},
+        }
+        custom = self.prefs.get("custom_theme", {})
+        if custom:
+            self.themes["Custom"] = custom
+        else:
+            # Keep Custom available in menus even before first save.
+            self.themes["Custom"] = dict(self.themes["Dark"])
+
+    def _build_menu(self) -> None:
+        """
+        Build the top application menu.
+        """
+        menubar = tk.Menu(self)
+        file_menu = tk.Menu(menubar, tearoff=0)
+        file_menu.add_command(label="Refresh", command=self.refresh_current, accelerator="Ctrl+R")
+        file_menu.add_separator()
+        file_menu.add_command(label="Exit", command=self.destroy, accelerator="Ctrl+Q")
+        menubar.add_cascade(label="File", menu=file_menu)
+        view = tk.Menu(menubar, tearoff=0)
+        theme_menu = tk.Menu(view, tearoff=0)
+        for name in ["Dark","Light Professional","Blue/Steel","High Contrast","Custom"]:
+            theme_menu.add_command(label=name, command=lambda n=name: self.apply_theme(n))
+        theme_menu.add_separator()
+        theme_menu.add_command(label="Custom Theme Maker", command=self.open_custom_theme_maker)
+        view.add_cascade(label="Theme", menu=theme_menu)
+        menubar.add_cascade(label="View", menu=view)
+        help_menu = tk.Menu(menubar, tearoff=0)
+        help_menu.add_command(label="Keyboard Shortcuts", command=self.show_shortcuts)
+        help_menu.add_command(label="Tips and Tricks", command=self.show_tips)
+        help_menu.add_command(label="About", command=self.show_about)
+        menubar.add_cascade(label="Help", menu=help_menu)
+        self.config(menu=menubar)
 
     def _build_widgets(self) -> None:
         """
@@ -334,6 +396,10 @@ class ReaderApp(tk.Tk):
             reddit_row1, textvariable=self.subreddit_var, width=16
         )
         self.subreddit_entry.pack(side=tk.LEFT, padx=(4, 4))
+        self.top_sub_var = tk.StringVar(value="Top subreddits")
+        self.top_sub_combo = ttk.Combobox(reddit_row1, textvariable=self.top_sub_var, values=TOP_SUBREDDITS, state="readonly", width=18)
+        self.top_sub_combo.pack(side=tk.LEFT, padx=(0,4))
+        self.top_sub_combo.bind("<<ComboboxSelected>>", self.on_top_subreddit_selected)
         self.subreddit_sort_var = tk.StringVar(value="hot")
         sort_combo = ttk.Combobox(
             reddit_row1,
@@ -372,8 +438,10 @@ class ReaderApp(tk.Tk):
         self.thread_list.bind("<KeyRelease-Up>", lambda e: self.on_thread_selected())
         self.thread_list.bind("<KeyRelease-Down>", lambda e: self.on_thread_selected())
         self.thread_list.bind("<Return>", self.on_thread_enter)
+        self.thread_list.bind("<Double-Button-1>", lambda e: self.open_current_thread_in_browser())
         self.thread_list.bind("<Tab>", self.on_threads_tab)
         Tooltip(self.thread_list, "Select a thread to view in the reader")
+        ttk.Button(left, text="Open Selected Thread in Browser", command=self.open_current_thread_in_browser).pack(fill=tk.X, pady=(4, 0))
 
         # Bookmarks
         bookmarks_label = ttk.Label(left, text="Bookmarks", style="Header.TLabel")
@@ -480,10 +548,21 @@ class ReaderApp(tk.Tk):
         )
         search_btn.pack(side=tk.LEFT, padx=(2, 0))
         Tooltip(search_btn, "Search within the current thread text")
+        open_browser_btn = ttk.Button(
+            reader_controls, text="Open in Browser", command=self.open_current_thread_in_browser
+        )
+        open_browser_btn.pack(side=tk.LEFT, padx=(8, 0))
 
-        # Reader text widget
+        # Reader + image preview area
+        content_pane = ttk.PanedWindow(reader_tab, orient=tk.HORIZONTAL)
+        content_pane.pack(fill=tk.BOTH, expand=True)
+        text_wrap = ttk.Frame(content_pane)
+        image_wrap = ttk.LabelFrame(content_pane, text="Images", padding=6)
+        content_pane.add(text_wrap, weight=4)
+        content_pane.add(image_wrap, weight=2)
+
         self.reader_text = tk.Text(
-            reader_tab,
+            text_wrap,
             wrap=tk.WORD,
             state="disabled",
             background="#121212",
@@ -493,6 +572,15 @@ class ReaderApp(tk.Tk):
             pady=8,
         )
         self.reader_text.pack(fill=tk.BOTH, expand=True)
+        self.image_list = tk.Listbox(image_wrap, height=8, exportselection=False)
+        self.image_list.pack(fill=tk.BOTH, expand=True)
+        self.image_list.bind("<Double-Button-1>", lambda e: self.open_selected_image_in_browser())
+        img_btn_row = ttk.Frame(image_wrap)
+        img_btn_row.pack(fill=tk.X, pady=(6, 0))
+        ttk.Button(img_btn_row, text="Open Image", command=self.open_selected_image_in_browser).pack(side=tk.LEFT)
+        ttk.Button(img_btn_row, text="Load Preview", command=self.load_selected_image_preview).pack(side=tk.LEFT, padx=(6, 0))
+        self.image_preview = tk.Label(image_wrap, text="No image selected", anchor="center")
+        self.image_preview.pack(fill=tk.BOTH, expand=True, pady=(6, 0))
         reader_font_size = int(self.prefs.get("font_size", 11))
         self._set_reader_font_size(reader_font_size)
 
@@ -547,6 +635,7 @@ class ReaderApp(tk.Tk):
         self.bind("<Control-plus>", lambda e: self.adjust_font_size(1))
         self.bind("<Control-minus>", lambda e: self.adjust_font_size(-1))
         self.bind("<Control-=>", lambda e: self.adjust_font_size(1))
+        self.bind("<Control-q>", lambda e: self.destroy())
 
     def _focus_search(self) -> None:
         """
@@ -562,6 +651,108 @@ class ReaderApp(tk.Tk):
         self.focus()
         if hasattr(self, "site_combo"):
             self.site_combo.focus_set()
+
+    def on_top_subreddit_selected(self, _event=None) -> None:
+        chosen = self.top_sub_var.get().strip()
+        if chosen:
+            self.subreddit_var.set(chosen)
+            self.load_subreddit_posts()
+
+    def apply_theme(self, name: str) -> None:
+        """
+        Apply a theme immediately to styled and Tk widgets.
+        """
+        if name not in self.themes:
+            return
+        t = self.themes[name]
+        self.theme_tokens = t
+        s = self._style_theme
+        s.configure("TFrame", background=t["bg"])
+        s.configure("TLabel", background=t["bg"], foreground=t["fg"])
+        s.configure("TLabelframe", background=t["panel"], foreground=t["fg"])
+        s.configure("TLabelframe.Label", background=t["panel"], foreground=t["fg"])
+        s.configure("TCheckbutton", background=t["bg"], foreground=t["fg"])
+        s.configure("TMenubutton", background=t["panel"], foreground=t["fg"])
+        self.configure(background=t["bg"])
+        if hasattr(self, "reader_text"):
+            self.reader_text.configure(background=t["text_bg"], foreground=t["fg"], insertbackground=t["fg"])
+            self.status_text.configure(background=t["status_bg"], foreground=t["muted"], insertbackground=t["fg"])
+            self.reader_text.tag_config("search_hit", background=t["search_bg"], foreground=t["fg"])
+            self.reader_text.tag_config("username", foreground=t["accent"])
+            self.reader_text.tag_config("thread_title", foreground=t["fg"])
+        self.prefs["theme_name"] = name
+        save_preferences(self.prefs)
+
+    def open_custom_theme_maker(self) -> None:
+        """
+        Open a simple custom theme editor with live preview.
+        """
+        win = tk.Toplevel(self)
+        win.title("Custom Theme Maker")
+        win.geometry("540x360")
+        win.resizable(False, False)
+        areas = [("bg","Window Background"),("panel","Panels"),("fg","Main Text"),("muted","Secondary Text"),("accent","Accent/Usernames"),("text_bg","Reader Background"),("status_bg","Status Background"),("search_bg","Search Highlight")]
+        current = dict(self.themes.get(self.prefs.get("theme_name","Dark"), self.themes["Dark"]))
+        vars_map = {}
+        preview_frame = ttk.LabelFrame(win, text="Preview", padding=8)
+        preview_frame.grid(row=0, column=2, rowspan=len(areas)+1, padx=(10, 8), pady=8, sticky="ns")
+        preview_label = tk.Label(preview_frame, text="Aa Preview Text", width=18)
+        preview_label.pack(pady=(4, 6))
+        preview_muted = tk.Label(preview_frame, text="Muted text", width=18)
+        preview_muted.pack(pady=(0, 6))
+        preview_box = tk.Label(preview_frame, text="Reader area", width=18, height=4)
+        preview_box.pack()
+
+        for i,(k,label) in enumerate(areas):
+            ttk.Label(win, text=label).grid(row=i,column=0,sticky="w",padx=8,pady=4)
+            v = tk.StringVar(value=current.get(k, "white"))
+            vars_map[k] = v
+            combo = ttk.Combobox(win, textvariable=v, values=[f"{c} ■" for c in COLOR_CHOICES], width=20, state="readonly")
+            combo.grid(row=i,column=1,sticky="w")
+            combo.bind(
+                "<<ComboboxSelected>>",
+                lambda e: self._preview_custom(vars_map, preview_label, preview_muted, preview_box),
+            )
+        self._preview_custom(vars_map, preview_label, preview_muted, preview_box)
+        ttk.Button(win, text="Save & Apply", command=lambda: self._save_custom_theme(vars_map, win)).grid(row=len(areas),column=1,sticky="e",pady=10)
+
+    def _preview_custom(self, vars_map: dict, preview_label=None, preview_muted=None, preview_box=None) -> None:
+        """
+        Live preview custom theme in app and optional sample widgets.
+        """
+        theme = {k: v.get().split()[0] for k, v in vars_map.items()}
+        self.themes["Custom"] = theme
+        self.apply_theme("Custom")
+        if preview_label:
+            preview_label.configure(bg=theme["panel"], fg=theme["fg"])
+            preview_muted.configure(bg=theme["panel"], fg=theme["muted"])
+            preview_box.configure(bg=theme["text_bg"], fg=theme["accent"])
+
+    def _save_custom_theme(self, vars_map: dict, window) -> None:
+        theme = {k: v.get().split()[0] for k, v in vars_map.items()}
+        self.themes["Custom"] = theme
+        self.prefs["custom_theme"] = theme
+        save_preferences(self.prefs)
+        self.apply_theme("Custom")
+        window.destroy()
+
+    def show_shortcuts(self) -> None:
+        messagebox.showinfo(
+            "Keyboard Shortcuts",
+            "Ctrl+F: Find in thread\n"
+            "Ctrl+L: Focus site selector\n"
+            "Ctrl+R: Refresh current view\n"
+            "Ctrl+B: Bookmark current thread\n"
+            "Ctrl+S: Cycle image mode\n"
+            "Ctrl++ / Ctrl+-: Font size\n"
+            "Ctrl+Q: Quit\n"
+            "Enter: Open selected thread\n"
+            "Tab: Move focus between selectors/list",
+        )
+    def show_tips(self) -> None:
+        messagebox.showinfo("Tips and Tricks", "Use the subreddit dropdown for quick navigation.\nUse bookmarks to save favorites.\nEnable auto-refresh for live discussions.\nUse theme menu to match lighting/accessibility.")
+    def show_about(self) -> None:
+        messagebox.showinfo("About", f"{APP_NAME}\nA clean 4chan + Reddit reader built with Python stdlib + Tkinter.")
 
     def adjust_font_size(self, delta: int) -> None:
         """
@@ -896,6 +1087,7 @@ class ReaderApp(tk.Tk):
         thread_no = descriptor.get("thread_no")
         if not board or not thread_no:
             return
+        self.current_thread_url = f"https://boards.4chan.org/{board}/thread/{thread_no}"
 
         def worker():
             self.log(f"Loading thread {thread_no} on /{board}/...")
@@ -916,6 +1108,10 @@ class ReaderApp(tk.Tk):
         """
         self.reader_text.configure(state="normal")
         self.reader_text.delete("1.0", tk.END)
+        self.current_image_urls = []
+        self.image_list.delete(0, tk.END)
+        self.image_preview.configure(image="", text="No image selected")
+        self._image_cache.clear()
 
         keyword_filter = [w.lower() for w in self.prefs.get("keyword_filter", [])]
         id_filter = [s.strip() for s in self.prefs.get("poster_filter_4chan", [])]
@@ -952,12 +1148,14 @@ class ReaderApp(tk.Tk):
                         tk.END, "[image blurred]\n\n", ("image_placeholder",)
                     )
                 else:
-                    # Show a clickable link to open image in browser
+                    # Show inline list entry and clickable link
                     board = self.current_board
                     tim = post.get("tim")
                     ext = post.get("ext", "")
                     if tim and ext:
                         url = f"https://i.4cdn.org/{board}/{tim}{ext}"
+                        self.current_image_urls.append(url)
+                        self.image_list.insert(tk.END, url.rsplit("/", 1)[-1])
                         start = self.reader_text.index(tk.END)
                         self.reader_text.insert(
                             tk.END, "[open image]\n\n", ("image_link",)
@@ -979,6 +1177,8 @@ class ReaderApp(tk.Tk):
         self.reader_text.tag_config("image_link", underline=True)
         self.reader_text.configure(state="disabled")
         self.reader_text.see("1.0")
+        if self.current_image_urls:
+            self.log(f"Found {len(self.current_image_urls)} image(s) in thread")
 
     # Reddit methods
 
@@ -1047,6 +1247,7 @@ class ReaderApp(tk.Tk):
         post_id = descriptor.get("id")
         if not sub or not post_id:
             return
+        self.current_thread_url = f"https://www.reddit.com/r/{parse.quote(sub)}/comments/{post_id}/"
 
         def worker():
             self.log(f"Loading Reddit thread {post_id} in r/{sub}...")
@@ -1083,6 +1284,10 @@ class ReaderApp(tk.Tk):
         """
         self.reader_text.configure(state="normal")
         self.reader_text.delete("1.0", tk.END)
+        self.current_image_urls = []
+        self.image_list.delete(0, tk.END)
+        self.image_preview.configure(image="", text="No image selected")
+        self._image_cache.clear()
 
         keyword_filter = [w.lower() for w in self.prefs.get("keyword_filter", [])]
         author_filter = [s.strip() for s in self.prefs.get("author_filter_reddit", [])]
@@ -1091,6 +1296,10 @@ class ReaderApp(tk.Tk):
         author = post_data.get("author") or "unknown"
         self.reader_text.insert(tk.END, f"{title}\n", ("thread_title",))
         self.reader_text.insert(tk.END, f"by u/{author}\n\n", ("username",))
+        maybe_image = post_data.get("url_overridden_by_dest") or post_data.get("url")
+        if isinstance(maybe_image, str) and any(maybe_image.lower().endswith(ext) for ext in (".png", ".jpg", ".jpeg", ".gif", ".webp")):
+            self.current_image_urls.append(maybe_image)
+            self.image_list.insert(tk.END, maybe_image.rsplit("/", 1)[-1])
 
         self.reader_text.tag_config(
             "thread_title",
@@ -1117,6 +1326,50 @@ class ReaderApp(tk.Tk):
         )
         self.reader_text.configure(state="disabled")
         self.reader_text.see("1.0")
+
+    def open_current_thread_in_browser(self) -> None:
+        """
+        Open the currently selected conversation in the system browser.
+        """
+        if not self.current_thread_url:
+            self.log("No thread selected to open in browser")
+            return
+        webbrowser.open(self.current_thread_url)
+        self.log(f"Opened in browser: {self.current_thread_url}")
+
+    def open_selected_image_in_browser(self) -> None:
+        selection = self.image_list.curselection()
+        if not selection:
+            return
+        idx = selection[0]
+        if idx >= len(self.current_image_urls):
+            return
+        webbrowser.open(self.current_image_urls[idx])
+
+    def load_selected_image_preview(self) -> None:
+        """
+        Load selected image preview (best effort with Tk-supported formats).
+        """
+        selection = self.image_list.curselection()
+        if not selection:
+            return
+        idx = selection[0]
+        if idx >= len(self.current_image_urls):
+            return
+        url = self.current_image_urls[idx]
+        proxy = self.prefs.get("proxy") or None
+        opener = build_opener(proxy)
+        try:
+            with opener.open(url, timeout=15) as resp:
+                data = resp.read()
+            encoded = base64.b64encode(data)
+            image = tk.PhotoImage(data=encoded)
+            self._image_cache = [image]
+            self.image_preview.configure(image=image, text="")
+            self.log("Loaded image preview")
+        except Exception:
+            self.image_preview.configure(image="", text="Preview unavailable.\nClick 'Open Image' to view in browser.")
+            self.log("Image preview unsupported for this format; open in browser.")
 
     # Bookmarks and recent
 
